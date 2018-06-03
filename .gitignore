@@ -1,6 +1,8 @@
 bazel-*
 .idea/
 .vscode/
+data/*
 cmake-build-debug
 CMakeLists.txt
 .clang-format
+*.swp

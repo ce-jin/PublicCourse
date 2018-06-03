@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <cmath>
 #include <ctime>
 #include <fstream>
 #include <regex>

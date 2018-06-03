@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <numeric>
+#include <random>
 #include <vector>
 
 #include "glog/logging.h"
