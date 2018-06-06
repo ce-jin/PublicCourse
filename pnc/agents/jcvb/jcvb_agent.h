@@ -25,10 +25,11 @@ namespace jcvb {
 
 const double pi = 3.141592653589793238462643383;
 const double speed_limit = 13.888888889;
+const double hard_speed_limit = 13.888888889/50*55;
+const double max_deceleration = 10.58822;
+const double time_to_reach_max_deceleration_upper_bound = 0.4;
+const double time_to_reach_zero_acc = 0.5;
 
-double sigmoid(double x){
-	return 1/(1+exp(-x));
-}
 int sgn(double x){
 	if (x>0)return 1;
 	else return -1;
@@ -38,6 +39,12 @@ inline interface::geometry::Point3D ToPoint3D (interface::geometry::Point2D p){
 		  pt.set_x(p.x());
 		  pt.set_y(p.y());
 		  pt.set_z(0);
+		  return pt;
+}
+inline interface::geometry::Point3D Midpoint (interface::geometry::Point3D p, interface::geometry::Point3D q){
+		  interface::geometry::Point3D pt;
+		  pt.set_x(0.5*(p.x()+q.x()));
+		  pt.set_y(0.5*(p.y()+q.y()));
 		  return pt;
 }
 inline interface::geometry::Point3D ToPoint3D (interface::geometry::Vector3d p){
@@ -57,12 +64,12 @@ inline interface::geometry::Point2D ToPoint2D (interface::geometry::Point3D p){
 class JcvbVehicleAgent : public simulation::VehicleAgent {
  public:
   explicit JcvbVehicleAgent(const std::string& name) : VehicleAgent(name) {
-  	  my_name_ = name;
+	  //my_name_ = name;
   }
 
   void Initialize(const interface::agent::AgentStatus&  agent_status ) override {
 	  LoadMap();
-	  cur_rou_ = FindRoute(ToPoint3D(agent_status.vehicle_status().position()), agent_status.route_status().destination());
+	  //cur_rou_ = FindRoute(ToPoint3D(agent_status.vehicle_status().position()), agent_status.route_status().destination());
   }
 
   interface::control::ControlCommand RunOneIteration(
@@ -75,8 +82,11 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 	  UpdateObstacles(agent_status);
 
 	  if (agent_status.route_status().is_new_request()) {
+	  	  /*if (std::abs(cur_pos_.x() - 227)<1 && std::abs(cur_pos_.y() + 2.5)<1 ) {
+			  //my_name_ = "jcvb2";
+		  }*/
+ 
 		  cur_rou_ = FindRoute(ToPoint3D(agent_status.vehicle_status().position()), agent_status.route_status().destination());
-		  position_reached_destination_ = false;
 	  }
 
 	  double v = CalcVelocity(cur_velo_);
@@ -86,18 +96,24 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 
 	  double to_dest = DistanceToDestination();
 
-	  double brake_dist = 40.0;
+	  double brake_dist = GetBrakeDistance(v, cur_acc_.x());
 
-          if(to_dest < brake_dist) {
-		  position_reached_destination_ = true;
+	  auto lightinfo = GetLightInfo(agent_status);
+
+	  double to_red = lightinfo.dist;
+
+	  if (v<5.5 && lightinfo.last_state == interface::map::Bulb::RED) {
+	  	  to_red = 1e9;
 	  }
 
-	  double to_red = GetLightInfo(agent_status).dist;
+	  double to_front = GetFrontObstacleSafeDistance();
 
-	  if ((position_reached_destination_ || to_red < brake_dist) && (v> 0.1 || -cur_acc_.x()<-0.5)) {
-	  	  double del = (v*v/(-cur_acc_.x())/2) / (std::min(to_dest, to_red)+1e-10);
+	  double dist_to = std::min(std::min(to_dest, to_red), to_front);
+	  //double dist_to = 1e9;
+
+	  if (dist_to < brake_dist ){
+	  	  double del = (v*v/(-cur_acc_.x())/2) / dist_to;
 	  	  if (del<0.0) del = 2.0;
-		  //std::cout<<del<<std::endl;
 		  if (v > 2.5) {
 			  del = std::min(del, 2.00);
 			  del = std::max(del, 0.60);
@@ -108,7 +124,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 			  command.set_brake_ratio(0.13 * del);
 		  }
 	  } else {
-	          if(std::min(to_dest, to_red)<1.0) {
+	          if(dist_to<1.0) {
 			  command.set_brake_ratio(0.5);
 			  command.set_throttle_ratio(0.0);
 		  }else if (v < speed_limit - 0.55) {
@@ -116,10 +132,16 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
 
+	  /*if (agent_status.simulation_status().simulation_time() > 4.4) {
+			  command.set_brake_ratio(1.0);
+			  command.set_throttle_ratio(0.0);
+	  }*/
+
 	  command.set_steering_angle(GetSteeringAngle());
 
 
-	  if (ObstaclesOnRoute(20, 3.0)) {
+	  //if (ObstaclesOnRoute(GetBrakeDistanceForPedestrian(v), 1.5+ 1.66667*(time_to_reach_max_deceleration_upper_bound + v/max_deceleration))) {
+	  if (CheckHardBrake(dist_to)) {
 			  command.set_brake_ratio(1.0); // hard brake
 			  command.set_throttle_ratio(0.0);
 			  //std::cout<<"hard"<<std::endl;
@@ -132,7 +154,6 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 	  //std::cout<<command.brake_ratio()<<" "<<command.throttle_ratio()<<std::endl;
 
 	  PublishVariable("key1", map_.lane()[cur_rou_.back().lane_ind].id().id());
-	  PublishVariable("key2", my_name_, utils::display::Color::Red());
 
 	  /*if (my_name_ == "jcvb12") {
 		  if (obstacle_id_map_.count("Cjcvb15")) {
@@ -144,9 +165,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 			  }
 		  }
 	  }*/
-	  //std::cout<<my_name_<<" "<<cur_pos_.x()<<" "<<cur_pos_.y()<<std::endl;
-	  std::cout<<my_name_<<" "<<agent_status.vehicle_status().position().x()<<" "<<agent_status.vehicle_status().position().y()<<std::endl;
-	  PublishVariable("key3", "var3", utils::display::Color::Red(), utils::display::Color::Green());
+	  //std::cout<<my_name_<<" "<<agent_status.vehicle_status().position().x()<<" "<<agent_status.vehicle_status().position().y()<<std::endl;
 	  //std::cout<< agent_status.route_status().destination().x() <<' '<< agent_status.route_status().destination().y()<<'\n';
 
 	  return command;
@@ -172,10 +191,163 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		return p;
 	  }
   };
-  bool ObstaclesOnRoute(int next_cnt, double safe_dist) {
+  bool CheckHardBrake(double front_dist) { // front_dist + pedes
+	  double v = CalcVelocity(cur_velo_);
+	  double acc = cur_acc_.x();
+
   	  auto points = GetNextPointsFromRoute();
-	  
-	  for (int i=0;i<obstacle_id_map_.size();i++)  if(!obstacle_history_[i].empty()) {
+	  for (int i=0;i<obstacle_id_map_.size();i++)  if(!obstacle_history_[i].empty() && pede_speed_[i] > -0.5) {
+		  auto q = obstacle_history_[i].back().center();
+
+
+		  if (v>0.1 && cur_velo_.x()*(cur_pos_.x()-q.x()) + cur_velo_.y()*(cur_pos_.y()-q.y()) >0) continue;
+
+		  double cumu_dist=0.0;
+		  double mindist = 1e9;
+		  double cumu_dist_at_min = 0.0;
+		  for (int j = 0; j < points.size();j ++) {
+			  double dist;
+			  if (j>1) {
+				  auto mid = Midpoint(points[j-1], points[j]);
+				  auto m1 = Midpoint(points[j-1],mid);
+				  auto m2 = Midpoint(points[j],mid);
+				  double thisdist = CalcDistance(points[j-1], points[j]);
+
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(m1, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(mid, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(m2, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+			  }
+			  dist = CalcDistance(points[j], q);
+			  if (dist<mindist) {
+				  mindist = dist;
+				  cumu_dist_at_min = cumu_dist;
+			  }
+		  }
+		  double vp = 6/3.6;
+
+		  if (pede_speed_[i]>0.0) vp = pede_speed_[i];
+
+		  double termv = v + (acc>0.8? time_to_reach_zero_acc*acc/2:0.0);
+
+		  double safe_dist = (acc>0.03? time_to_reach_zero_acc*(v+vp+time_to_reach_zero_acc/2*acc):0.0 ) + (acc>-max_deceleration+0.03? (termv + vp) * time_to_reach_max_deceleration_upper_bound:0.0) + (termv/2 + vp) * (termv/max_deceleration) + 4.0;
+
+		  if (cumu_dist_at_min>safe_dist) continue;
+
+		  double safe_width = 1.3 + vp*( (acc>0.03?time_to_reach_zero_acc:0.0) + (acc>-max_deceleration+0.03?time_to_reach_max_deceleration_upper_bound:0.0) + (termv/max_deceleration) );
+
+		  if (mindist>safe_width) continue;
+
+		  return true;
+	  }
+
+	  double termv = v + (acc>0.8? time_to_reach_zero_acc*acc/2:0.0);
+	  double safe_dist = (acc>0.03? time_to_reach_zero_acc*(v+time_to_reach_zero_acc/2*acc):0.0 ) + (acc>-max_deceleration+0.03? (termv) * time_to_reach_max_deceleration_upper_bound:0.0) + (termv/2 ) * (termv/max_deceleration); 
+	  if (front_dist<safe_dist) return true;
+	  return false;
+  }
+
+  double GetFrontObstacleSafeDistance() { // only car
+  	  double ans = 1e9;
+
+	  double v = CalcVelocity(cur_velo_);
+
+  	  auto points = GetNextPointsFromRoute();
+	  for (int i=0;i<obstacle_id_map_.size();i++)  if(!obstacle_history_[i].empty() && pede_speed_[i] < -0.5) {
+
+		  auto q = obstacle_history_[i].back().center();
+
+		  if(my_name_ == "jcvb2") {
+			  std::cout<<"an obstacle: "<<q.x()<<" "<<q.y()<<std::endl;
+		  }
+
+
+		  if (v>0.1 && cur_velo_.x()*(cur_pos_.x()-q.x()) + cur_velo_.y()*(cur_pos_.y()-q.y()) >v * 4.8) continue;
+
+		  double dis = 1e9;
+
+		  double cumu_dist=0.0;
+		  double mindist = 1e9;
+		  double cumu_dist_at_min = 0.0;
+		  for (int j = 0; j < points.size();j ++) {
+			  double dist;
+			  if (j>1) {
+				  auto mid = Midpoint(points[j-1], points[j]);
+				  auto m1 = Midpoint(points[j-1],mid);
+				  auto m2 = Midpoint(points[j],mid);
+				  double thisdist = CalcDistance(points[j-1], points[j]);
+
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(m1, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(mid, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+				  dist = CalcDistance(m2, q);
+				  if (dist<mindist) {
+					  mindist = dist;
+					  cumu_dist_at_min = cumu_dist;
+				  }
+				  cumu_dist += 0.25 * thisdist;
+			  }
+			  dist = CalcDistance(points[j], q);
+			  if (dist<mindist) {
+				  mindist = dist;
+				  cumu_dist_at_min = cumu_dist;
+			  }
+		  }
+		  if(my_name_ == "jcvb2") {
+		  	  std::cout<<mindist<<std::endl;
+		  	  std::cout<<cumu_dist_at_min<<std::endl;
+		  }
+		  if (mindist>4) continue;//TODO
+
+		  if (cumu_dist_at_min<ans) {
+		  	  ans=cumu_dist_at_min;
+		  }
+	  }
+	  if (my_name_=="jcvb2") {
+		  std::cout<< ans<<std::endl;
+	  }
+	  return ans - 8.0;
+  }
+
+  /*bool ObstaclesOnRoute(double front_dist, double safe_dist) {
+  	  auto points = GetNextPointsFromRoute();
+	  int next_cnt = 0;
+	  double cumu_dist=0.0;
+	  for (int j = 0; j < points.size();j ++) {
+	  	  next_cnt ++;
+		  if (j>1) {
+			  cumu_dist += CalcDistance(points[j-1], points[j]);
+			  if (cumu_dist > front_dist) {
+			  	  break;
+			  }
+		  }
+	  }
+	  for (int i=0;i<obstacle_id_map_.size();i++)  if(!obstacle_history_[i].empty() && pede_speed_[i]<-0.5) {
 		  auto q = obstacle_history_[i].back().center();
 		  int meet_cnt = 0;
 
@@ -185,10 +357,10 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  	  	  return true;
 			  }
 			  if (j>1) {
-				  interface::geometry::Point3D mid;
-				  mid.set_x((points[j].x()+points[j-1].x())*0.5);
-				  mid.set_y((points[j].y()+points[j-1].y())*0.5);
-				  if (CalcDistance(mid, q) < safe_dist) {
+				  auto mid = Midpoint(points[j], points[j-1]);
+				  auto m1 = Midpoint(points[j], mid);
+				  auto m2 = Midpoint(points[j-1], mid);
+				  if (CalcDistance(mid, q) < safe_dist || CalcDistance(m1, q) < safe_dist || CalcDistance(m2, q) < safe_dist) {
 					  return true;
 				  }
 			  }
@@ -196,7 +368,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
 	  return false;
-  }
+  }*/
   double GetThrottleForAcceleration(double v) {
 	  if (v<0.22) return 0.89;
 	  else if (v<3.5) return 0.29;
@@ -208,8 +380,21 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 	  else if (v<10) return 0.52;
 	  else return 0.55;
   }
+  double GetBrakeDistance(double v, double acc) {
+	  if (v>10) return 44.0;
+  	  if (v>7) return 32.0;
+  	  if (v>5) return 18.0;
+  	  if (v>4) return 12.0;
+  	  if (v>1) return 6.0;
+  	  if (v>0.2) return 1.0;
+  	  return 0.5;
+  }
   double GetSteeringAngle() {
 	  auto next_points = GetNextPointsFromRoute();
+	  int need_cnt = 30;
+	  if (next_points.size() > need_cnt) {
+	  	  next_points.resize(need_cnt);
+	  }
 	  if (next_points.size() > 0) {
 		  double temp_a=0.0;
 		  double weight = 0.0;
@@ -244,21 +429,40 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
     public:
   	  double dist;
   	  int last_state;
-  	  double remain_time;
+  	  int this_state;
+  	  double time;
   	  LightInfo(){}
-  	  LightInfo(double d, int l, double r):dist(d),last_state(l),remain_time(r){}
+  	  LightInfo(double d, int l, int thi, double r):dist(d),last_state(l),this_state(thi),time(r){}
   };
 
   LightInfo GetLightInfo(const interface::agent::AgentStatus& agent_status) {
+
+	  for (auto traffic_light: agent_status.perception_status().traffic_light()) {
+		  for (auto light: traffic_light.single_traffic_light_status()) {
+			  auto color = light.color();
+			  auto id = light.id().id();
+			  if (recent_light_[id] != color) {
+			  	  last_light_[id]= recent_light_[id];
+			  	  recent_light_[id] = color;
+			  	  light_time_[id] = 0.0;
+			  }else {
+			  	  light_time_[id] += 0.01;
+			  }
+		  }
+	  }
+
 	  int curlaneid = cur_rou_.back().lane_ind;
 	  double safe_dist = 3.0;
 	  double to_red = 1.1e9;
+	  int color = -1, lastcolor=-1;
+	  double tim=100.0;
 	  if (lane_light_[curlaneid]!="") {
-	  	  int color;
 	  	  for (auto traffic_light: agent_status.perception_status().traffic_light()) {
 			  for (auto light: traffic_light.single_traffic_light_status()) {
 				  if (light.id().id() == lane_light_[curlaneid]) {
 					  color = light.color();
+					  lastcolor = last_light_[light.id().id()];
+					  tim = light_time_[light.id().id()];
 				  }
 			  }
 		  }
@@ -269,7 +473,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  	  to_red = std::max(to_red,0.0);
 		  }
 	  }
-	  return LightInfo(to_red, 0, 100.0);
+	  return LightInfo(to_red+1e-10, lastcolor, color, tim);
   }
   class LanePoint {
 	  public:
@@ -320,6 +524,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
   }
 
   std::vector<LanePoint> FindRoute(const interface::geometry::Point3D& position, const interface::geometry::Point3D& destination)const { // back is cur, front is dest
+	  std::cout<<position.x()<<" "<<position.y()<<std::endl;
 	  std::map<LanePoint, int> dist;
 	  std::map<LanePoint, bool> inqueue;
 	  std::map<LanePoint, LanePoint> prev;
@@ -386,6 +591,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
   }
+
   bool Passed(LanePoint p){
   	  auto p1 = LoadLanePoint(LanePoint(p.lane_ind, 0));
   	  auto p2 = LoadLanePoint(GetEnd(p));
@@ -403,7 +609,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
 
-	  int cnt = 30;
+	  int cnt = 50;
 
 	  std::vector<interface::geometry::Point3D> ret;
 	  for (int j = cur_rou_.size() - 1;j>=0 &&  ret.size() < cnt; j --) {
@@ -412,10 +618,6 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 	  	  	  ret.push_back(LoadLanePoint(LanePoint(temp.lane_ind, k)));
 		  }
 	  }
-	  // TODO
-	  /*while(ret.size() < cnt) {
-	 	ret.push_back(ret.back());
-	  }*/
 	  return ret;
   }
   void LoadMap() {
@@ -457,7 +659,12 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
 
+
 	  lane_light_.clear();
+	  last_light_.clear();
+	  recent_light_.clear();
+	  light_time_.clear();
+
 	  int tot_cnt = 0;
 	  for (int i = 0; i < map_.lane_size(); i ++) {
 		  auto& lane1 = map_.lane()[i];
@@ -478,6 +685,13 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  CHECK(cnt<=1);
 		  lane_light_.push_back(ans);
 	  }
+	  for (auto light: map_.traffic_light()) {
+	  	  auto id = light.id().id();
+		  recent_light_[id] = interface::map::Bulb::YELLOW;
+		  last_light_[id] = -1;
+		  light_time_[id] = 0.0;
+	  }
+
 	  CHECK(tot_cnt == map_.traffic_light_size());
   }
   double CalcDistance(const interface::geometry::Vector3d& position,
@@ -545,7 +759,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 			  sum += theta* l;
 		  }
 	  }
-	  return sum;
+	  return sum+1e-10;
   }
   double DistanceToNextStraight ()const {
   	  for (int i=cur_rou_.size() - 1 ;i >= 0;i --) {
@@ -612,6 +826,11 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  	  obstacle_heading_.resize(obstacle_id_map_.size());
 		  	  obstacle_history_.resize(obstacle_id_map_.size());
 		  	  pede_speed_.resize(obstacle_id_map_.size());
+		  	  if (strid[0]=='C') {
+		  	  	  pede_speed_[pede_speed_.size() - 1] = -1.0;
+			  } else {
+		  	  	  pede_speed_[pede_speed_.size() - 1] = 0.0;
+			  }
 		  } else id = obstacle_id_map_[strid];
 
 		  appeared.insert(id);
@@ -621,7 +840,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 		  obstacle_history_[id].push_back(poly);
 		  obstacle_heading_[id] = obstacle.heading();
-		  //if(my_name_ == "jcvb12") std::cout<<strid<<" "<< poly.center().x()<<" "<<poly.center().y()<< " ";
+		  if(my_name_ == "jcvb2") std::cout<<strid<<" "<< poly.center().x()<<" "<<poly.center().y()<< " ";
 
 		  if (obstacle_history_[id].size()>=2 && obstacle.type() == interface::perception::PEDESTRIAN) {
 		  	  auto now = poly.center();
@@ -633,7 +852,7 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  	  //std::cout<<obstacle.heading()<<" "<< atan2(now.y()-prev.y(),now.x()-prev.x())<<std::endl;
 		  }
 	  }
-	  //if(my_name_ =="jcvb12")std::cout<<std::endl;
+	  if(my_name_ =="jcvb2")std::cout<<std::endl;
 	  for (int i = 0; i < obstacle_id_map_.size(); i ++) {
 	  	  if (!appeared.count(i)) {
 	  	  	  obstacle_history_[i].clear();
@@ -644,9 +863,6 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 		  }
 	  }
   }
-  // Whether vehicle's current position reaches the destination
-  bool position_reached_destination_ = false;
-
   interface::map::Map map_;
   std::vector<std::vector<int> > lane_successors_;
   std::vector<int> lane_curve_; //1: straight, 2: curved
@@ -660,7 +876,12 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
   std::map<std::string, int> obstacle_id_map_;
   std::vector<std::deque<Polygon> > obstacle_history_;
   std::vector<double> obstacle_heading_;
-  std::vector<double> pede_speed_; //deterministic
+  std::vector<double> pede_speed_; //deterministic. -1 if it is a car
+
+  std::map<std::string, int> last_light_;
+  std::map<std::string, int> recent_light_;
+  std::map<std::string, double> light_time_;
+
   std::string my_name_;
 };
 
@@ -672,16 +893,9 @@ class JcvbVehicleAgent : public simulation::VehicleAgent {
 
 // TODO
 // zhangai de sudu, acc, pos
-// change brake dist according to current speed
-// hardbrake: next an distance instead of cnts
-// how to stop when close
-// wait at crossing
-// (pengzhuang )
-// buxuyao deng de honglvdeng
+// wait at crossing // (pengzhuang )
 // how to jiasu to any speed? (qidong)
-// brake dist ~ 15m
-// zuoyouyaobai (curva)
-// changshijianbudong : replan
 // an honglvdeng zuo zuiduanlu
-// acce (tingche, shache)
-
+// zuoyouyaobai (curva)
+//
+// changshijianbudong : replan
