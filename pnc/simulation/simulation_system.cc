@@ -24,7 +24,9 @@ SimulationSystem::SimulationSystem(
 
 void SimulationSystem::Initialize() {
   if (FLAGS_srand_by_time) {
-    std::srand(time(0));
+  	  //int sed = time(0);
+    std::srand(1);
+    //std::cout
   }
   map_lib_ = std::make_unique<pnc::map::MapLib>();
   CHECK(file::ReadTextFileToProto(utils::path::GetVehicleParamsPath(), &vehicle_params_));
