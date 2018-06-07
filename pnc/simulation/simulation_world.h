@@ -77,7 +77,6 @@ class SimulationWorld {
   }
 
  private:
-
   void GenerateInitialStatusCandidates();
 
   interface::agent::VehicleStatus GenerateRandomInitialStatus();
