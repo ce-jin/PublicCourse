@@ -58,9 +58,9 @@ void SimulationWorld::GenerateInitialStatusCandidates() {
 
 VehicleStatus SimulationWorld::GenerateRandomInitialStatus() {
   CHECK(current_initial_vehicle_status_index_ < initial_vehicle_status_candidates_.size())
-        << "Generated too many vehicle agents";
+      << "Generated too many vehicle agents";
   VehicleStatus result = initial_vehicle_status_candidates_[current_initial_vehicle_status_index_];
-  current_initial_vehicle_status_index_ ++;
+  current_initial_vehicle_status_index_++;
   return result;
 }
 
