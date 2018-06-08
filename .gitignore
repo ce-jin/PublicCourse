@@ -6,3 +6,5 @@ cmake-build-debug
 CMakeLists.txt
 .clang-format
 *.swp
+pnc/agents/darkartist/*
+pnc/agents/sample/*

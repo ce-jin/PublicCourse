@@ -7,6 +7,7 @@ cc_library(
     deps = [
         "//pnc/agents/sample:sample_agent",
         "//pnc/agents/jcvb:jcvb_agent",
+	"//pnc/agents/darkartist:darkartist",
         "//pnc/simulation:vehicle_agent_factory",
     ],
     alwayslink = 1,
