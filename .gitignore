@@ -8,3 +8,4 @@ CMakeLists.txt
 *.swp
 pnc/agents/darkartist/*
 pnc/agents/sample/*
+sample_agent.h
